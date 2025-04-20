@@ -1,7 +1,8 @@
-# app/core/config.py
-from pydantic import BaseSettings, PostgresDsn, validator
+from pydantic_settings import BaseSettings
+from pydantic import PostgresDsn, field_validator
 import secrets
-from typing import Optional, Dict, Any
+from typing import Optional, Any, Union
+from pydantic_core.core_schema import ValidationInfo
 
 class Settings(BaseSettings):
     # Application settings
@@ -22,24 +23,26 @@ class Settings(BaseSettings):
     POSTGRES_DB: str
     DATABASE_URL: Optional[PostgresDsn] = None
 
-    @validator("DATABASE_URL", pre=True)
-    def assemble_db_connection(cls, v: Optional[str], values: Dict[str, Any]) -> Any:
+    @field_validator("DATABASE_URL", mode="before")
+    def assemble_db_connection(cls, v: Optional[str], info: ValidationInfo) -> Any:
         if isinstance(v, str):
             return v
         return PostgresDsn.build(
             scheme="postgresql",
-            user=values.get("POSTGRES_USER"),
-            password=values.get("POSTGRES_PASSWORD"),
-            host=values.get("POSTGRES_SERVER"),
-            path=f"/{values.get('POSTGRES_DB') or ''}",
+            username=info.data.get("POSTGRES_USER"),
+            password=info.data.get("POSTGRES_PASSWORD"),
+            host=info.data.get("POSTGRES_SERVER"),
+            path=f"/{info.data.get('POSTGRES_DB') or ''}",
         )
     
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000"]  # React default port
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": True
+    }
 
 # Create settings instance
 settings = Settings()
