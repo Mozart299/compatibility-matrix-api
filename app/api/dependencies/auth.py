@@ -1,63 +1,67 @@
 # app/api/dependencies/auth.py
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
+from fastapi import Depends, HTTPException, status, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from typing import Optional
 
-from app.db.database import get_db
-from app.models.user import User
-from app.services.auth import AuthService
+from app.db.supabase import get_supabase, get_admin_supabase
+from supabase import Client
 
-# OAuth2 scheme for token extraction from request
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+# HTTP Bearer scheme for token extraction
+security = HTTPBearer()
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-) -> User:
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    supabase: Client = Depends(get_admin_supabase)
+):
     """
-    Dependency to get the current authenticated user.
-    Validates the JWT token and returns the user.
+    Dependency to get the current authenticated user from Supabase.
+    Validates the JWT token and returns the user data.
     """
-    # Decode and validate token
-    token_data = AuthService.decode_token(token)
-    if not token_data:
+    try:
+        # Extract token from Authorization header
+        token = credentials.credentials
+        
+        # Verify the token and get user data
+        # Using admin_supabase to avoid permissions issues
+        response = supabase.auth.get_user(token)
+        user = response.user
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Return the user data
+        return user
+        
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
+            detail=f"Invalid authentication credentials: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Get user from database
-    user_id = int(token_data.sub)
-    user = AuthService.get_user_by_id(db, user_id)
-    
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Check if user is active
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
-    
-    return user
 
-def get_current_active_verified_user(
-    current_user: User = Depends(get_current_user),
-) -> User:
+async def get_optional_user(
+    authorization: Optional[str] = Header(None),
+    supabase: Client = Depends(get_admin_supabase)
+):
     """
-    Dependency to get the current active and verified user.
-    For routes that require email verification.
+    Dependency to optionally get the current user.
+    Used for endpoints that work with or without authentication.
     """
-    if not current_user.is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User not verified"
-        )
-    
-    return current_user
+    if not authorization:
+        return None
+        
+    try:
+        # Extract token from Authorization header
+        # The header format should be "Bearer {token}"
+        token = authorization.split(" ")[1]
+        
+        # Verify the token and get user data
+        response = supabase.auth.get_user(token)
+        return response.user
+    except:
+        # If any error occurs, just return None instead of raising an exception
+        return None

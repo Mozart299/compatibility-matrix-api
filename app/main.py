@@ -4,10 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.api import api_router
 from app.core.config import settings
-from app.db.database import Base, engine
-
-# Create database tables
-Base.metadata.create_all(bind=engine)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -31,4 +27,9 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 @app.get("/")
 def root():
     """Root endpoint to verify API is running"""
-    return {"message": "Welcome to Compatibility Matrix API"}
+    return {"message": "Welcome to Compatibility Matrix API with Supabase integration"}
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy"}

@@ -1,6 +1,6 @@
-# Compatibility Matrix API
+# Compatibility Matrix API with Supabase
 
-Backend API for the Compatibility Matrix System, developed with FastAPI and PostgreSQL.
+Backend API for the Compatibility Matrix System, developed with FastAPI and Supabase.
 
 ## Overview
 
@@ -8,7 +8,7 @@ The Compatibility Matrix API powers the backend services for measuring and analy
 
 ## Features
 
-- User authentication (JWT with refresh tokens)
+- User authentication (using Supabase Auth)
 - User profile management
 - Assessment delivery and response collection
 - Compatibility calculation algorithms
@@ -18,22 +18,147 @@ The Compatibility Matrix API powers the backend services for measuring and analy
 ## Tech Stack
 
 - **Framework**: FastAPI
-- **Database**: PostgreSQL with SQLAlchemy ORM
-- **Authentication**: JWT (JSON Web Tokens)
-- **Password Hashing**: Bcrypt
+- **Database & Auth**: Supabase
 - **API Documentation**: OpenAPI (Swagger UI)
-- **Database Migrations**: Alembic
-- **Testing**: Pytest
 
-## Setup Instructions
-
-### Prerequisites
+## Prerequisites
 
 - Python 3.10+
-- PostgreSQL
-- Git
+- A Supabase account and project
 
-### Local Development Setup
+## Supabase Setup
+
+1. **Create a Supabase Project**
+   - Sign up at [supabase.com](https://supabase.com) if you haven't already
+   - Create a new project
+
+2. **Set Up Database Tables**
+   - Navigate to the SQL Editor in your Supabase dashboard
+   - Run the following SQL scripts to create the necessary tables:
+
+```sql
+-- Create profiles table
+CREATE TABLE profiles (
+  id UUID REFERENCES auth.users(id) PRIMARY KEY,
+  email TEXT NOT NULL,
+  name TEXT NOT NULL,
+  avatar_url TEXT,
+  bio TEXT,
+  location TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- Create assessment_dimensions table
+CREATE TABLE assessment_dimensions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name TEXT NOT NULL,
+  description TEXT,
+  weight INTEGER DEFAULT 1,
+  order_index INTEGER,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- Create assessment_questions table
+CREATE TABLE assessment_questions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  dimension_id UUID REFERENCES assessment_dimensions(id) NOT NULL,
+  text TEXT NOT NULL,
+  options JSONB NOT NULL,
+  weight INTEGER DEFAULT 1,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- Create user_assessments table
+CREATE TABLE user_assessments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES profiles(id) NOT NULL,
+  dimension_id UUID REFERENCES assessment_dimensions(id) NOT NULL,
+  status TEXT NOT NULL,
+  progress INTEGER DEFAULT 0,
+  responses JSONB DEFAULT '[]',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- Create compatibility_scores table
+CREATE TABLE compatibility_scores (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id_a UUID REFERENCES profiles(id) NOT NULL,
+  user_id_b UUID REFERENCES profiles(id) NOT NULL,
+  overall_score INTEGER NOT NULL,
+  dimension_scores JSONB DEFAULT '[]',
+  strengths JSONB DEFAULT '[]',
+  challenges JSONB DEFAULT '[]',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  -- Ensure only one record per user pair
+  CONSTRAINT unique_user_pair UNIQUE (user_id_a, user_id_b),
+  -- Ensure user_id_a is always less than user_id_b to avoid duplicates
+  CONSTRAINT user_order CHECK (user_id_a < user_id_b)
+);
+```
+
+3. **Set Up Row Level Security Policies**
+   - Configure RLS policies to secure your data:
+
+```sql
+-- Enable RLS on all tables
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assessment_dimensions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assessment_questions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_assessments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE compatibility_scores ENABLE ROW LEVEL SECURITY;
+
+-- Profiles policies
+CREATE POLICY "Users can view their own profile"
+  ON profiles FOR SELECT
+  USING (auth.uid() = id);
+
+CREATE POLICY "Users can update their own profile"
+  ON profiles FOR UPDATE
+  USING (auth.uid() = id);
+
+-- Assessment dimensions policies (readable by all authenticated users)
+CREATE POLICY "Assessment dimensions are viewable by all authenticated users"
+  ON assessment_dimensions FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- Assessment questions policies
+CREATE POLICY "Assessment questions are viewable by all authenticated users"
+  ON assessment_questions FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- User assessments policies
+CREATE POLICY "Users can view their own assessments"
+  ON user_assessments FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own assessments"
+  ON user_assessments FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own assessments"
+  ON user_assessments FOR UPDATE
+  USING (auth.uid() = user_id);
+
+-- Compatibility scores policies
+CREATE POLICY "Users can view compatibility scores they're part of"
+  ON compatibility_scores FOR SELECT
+  USING (auth.uid() = user_id_a OR auth.uid() = user_id_b);
+```
+
+4. **Set Up Auth**
+   - Configure Email Auth in Supabase Auth settings
+   - Optionally enable social providers
+
+5. **Get API Keys**
+   - From your Supabase project dashboard, get:
+     - Project URL
+     - API Key (anon public)
+     - Service Role Key (keep this secret)
+
+## Local Development Setup
 
 1. **Clone the repository**
 
@@ -63,46 +188,22 @@ Create a `.env` file in the root directory based on the provided `.env.sample`:
 cp .env.sample .env
 ```
 
-Edit the `.env` file with your configuration details:
+Edit the `.env` file with your Supabase project details:
 
 ```
 # Application
 APP_NAME=Compatibility Matrix
 
-# Security
-JWT_SECRET_KEY=your_generated_secret_key
-JWT_REFRESH_SECRET_KEY=your_generated_refresh_key
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=15
-REFRESH_TOKEN_EXPIRE_DAYS=7
-
-# Database
-POSTGRES_SERVER=localhost
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_password
-POSTGRES_DB=compatibility_matrix
+# Supabase Configuration
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_KEY=your-anon-key
+SUPABASE_SERVICE_KEY=your-service-role-key
 
 # CORS
 BACKEND_CORS_ORIGINS=["http://localhost:3000"]
 ```
 
-Generate secure keys for JWT:
-
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-5. **Set up the database**
-
-Create a PostgreSQL database named "compatibility_matrix":
-
-```bash
-createdb compatibility_matrix
-```
-
-The application will create the necessary tables automatically on startup.
-
-6. **Run the application**
+5. **Run the application**
 
 ```bash
 uvicorn app.main:app --reload
@@ -119,29 +220,27 @@ API documentation is available at:
 ```
 compatibility-matrix-api/
   ├── app/
-  │   ├── api/                  # API endpoints
+  │   ├── api/                   # API endpoints
   │   │   ├── v1/
-  │   │   │   ├── endpoints/    # API route handlers
-  │   │   │   │   ├── auth.py   # Authentication endpoints
-  │   │   │   │   ├── users.py  # User endpoints
-  │   │   │   ├── api.py        # API router
-  │   │   ├── dependencies/     # API dependencies
-  │   │       ├── auth.py       # Auth dependencies
-  │   ├── core/                 # Core application code
-  │   │   ├── config.py         # Configuration settings
-  │   ├── db/                   # Database setup
-  │   │   ├── database.py       # Database connection
-  │   ├── models/               # Database models
-  │   │   ├── user.py           # User model
-  │   ├── services/             # Business logic
-  │   │   ├── auth.py           # Auth service
-  │   ├── main.py               # Application entry point
-  ├── migrations/               # Database migrations
-  ├── tests/                    # Test suite
-  ├── requirements.txt          # Python dependencies
-  ├── .env.sample               # Sample environment variables
-  ├── .gitignore                # Git ignore configuration
-  ├── README.md                 # Project documentation
+  │   │   │   ├── endpoints/     # API route handlers
+  │   │   │   │   ├── auth.py    # Authentication endpoints
+  │   │   │   │   ├── users.py   # User endpoints
+  │   │   │   │   ├── assessments.py  # Assessment endpoints
+  │   │   │   │   ├── compatibility.py  # Compatibility endpoints
+  │   │   │   ├── api.py         # API router
+  │   │   ├── dependencies/      # API dependencies
+  │   │       ├── auth.py        # Auth dependencies
+  │   ├── core/                  # Core application code
+  │   │   ├── config.py          # Configuration settings
+  │   ├── db/                    # Database setup
+  │   │   ├── supabase.py        # Supabase client
+  │   ├── models/                # Pydantic models
+  │   │   ├── user.py            # User models
+  │   ├── main.py                # Application entry point
+  ├── requirements.txt           # Python dependencies
+  ├── .env.sample                # Sample environment variables
+  ├── .gitignore                 # Git ignore configuration
+  ├── README.md                  # Project documentation
 ```
 
 ## API Endpoints
@@ -152,6 +251,7 @@ compatibility-matrix-api/
 - `POST /api/v1/auth/login` - Login and get access token
 - `POST /api/v1/auth/refresh` - Refresh access token
 - `POST /api/v1/auth/logout` - Logout
+- `POST /api/v1/auth/send-reset-password` - Send password reset email
 
 ### Users
 
@@ -159,63 +259,31 @@ compatibility-matrix-api/
 - `PUT /api/v1/users/me` - Update current user profile
 - `GET /api/v1/users/{user_id}` - Get user by ID
 
-### Assessment (Coming Soon)
+### Assessments
 
-- `GET /api/v1/assessments` - Get all assessments
+- `GET /api/v1/assessments` - Get all assessments for the current user
 - `POST /api/v1/assessments` - Start a new assessment
 - `GET /api/v1/assessments/{assessment_id}` - Get assessment details
-- `PUT /api/v1/assessments/{assessment_id}` - Update assessment
-- `GET /api/v1/questions` - Get assessment questions
-- `POST /api/v1/responses` - Submit assessment responses
+- `PUT /api/v1/assessments/{assessment_id}` - Update assessment with new responses
+- `GET /api/v1/assessments/questions/{dimension_id}` - Get questions for a dimension
+- `POST /api/v1/assessments/responses` - Submit assessment responses
 
-### Compatibility (Coming Soon)
+### Compatibility
 
-- `GET /api/v1/compatibility` - Get compatibility matrix
+- `GET /api/v1/compatibility/matrix` - Get compatibility matrix
 - `GET /api/v1/compatibility/{user_id}` - Get compatibility with specific user
 - `GET /api/v1/compatibility/report/{user_id}` - Get detailed compatibility report
 
 ## Authentication Flow
 
-1. **Registration**: Users register with email, name, and password
-2. **Login**: Users login with email and password to receive JWT access and refresh tokens
-3. **Access Protected Routes**: Access token is sent in Authorization header for protected endpoints
-4. **Token Refresh**: When access token expires, refresh token is used to obtain a new one
-5. **Logout**: Tokens are removed client-side
-
-## Database Schema
-
-### Users Table
-
-| Column         | Type      | Description                   |
-|----------------|-----------|-------------------------------|
-| id             | Integer   | Primary key                   |
-| email          | String    | Unique user email             |
-| name           | String    | User's full name              |
-| password_hash  | String    | Hashed password               |
-| created_at     | DateTime  | Account creation timestamp    |
-| is_active      | Boolean   | Account status                |
-| is_verified    | Boolean   | Email verification status     |
-
-Additional tables for assessments, responses, and compatibility scores will be added as development progresses.
+1. **Registration**: Users register with email, name, and password using Supabase Auth
+2. **Email Verification**: Supabase sends verification email
+3. **Login**: Users login with email and password to receive JWT access and refresh tokens
+4. **Access Protected Routes**: JWT is sent in Authorization header for protected endpoints
+5. **Token Refresh**: When access token expires, refresh token is used to obtain a new one
+6. **Logout**: Session is invalidated in Supabase Auth
 
 ## Development Guidelines
-
-### Code Style
-
-We follow PEP 8 style guide for Python code. Please install and run flake8 before committing changes:
-
-```bash
-pip install flake8
-flake8 .
-```
-
-### Testing
-
-Tests are written using pytest. Run the tests with:
-
-```bash
-pytest
-```
 
 ### Adding New Endpoints
 
@@ -223,8 +291,11 @@ pytest
 2. Define the routes and handlers
 3. Include the router in `app/api/v1/api.py`
 4. Create necessary models in `app/models/`
-5. Implement business logic in `app/services/`
-6. Add tests in `tests/`
+5. Add the necessary tables to Supabase
+
+### Testing
+
+Use the Swagger UI at http://localhost:8000/docs to test API endpoints during development.
 
 ## Deployment
 
@@ -232,27 +303,13 @@ pytest
 
 For production deployment:
 
-1. Set up a production PostgreSQL database
+1. Configure your Supabase project for production
 2. Update environment variables for production
-3. Use a production ASGI server like Gunicorn with Uvicorn workers:
-
-```bash
-gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app
-```
-
-### Docker Deployment (Coming Soon)
-
-Docker configuration will be provided in a future update.
+3. Deploy the API to your preferred hosting platform (e.g., Heroku, Azure, AWS)
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## License
 
@@ -261,6 +318,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgements
 
 - [FastAPI](https://fastapi.tiangolo.com/)
-- [SQLAlchemy](https://www.sqlalchemy.org/)
+- [Supabase](https://supabase.com/)
 - [Pydantic](https://pydantic-docs.helpmanual.io/)
-- [JWT](https://jwt.io/)

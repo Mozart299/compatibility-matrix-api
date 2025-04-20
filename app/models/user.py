@@ -1,26 +1,7 @@
 # app/models/user.py
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, EmailStr, Field, validator
-from sqlalchemy import Column, Integer, String, DateTime, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-
-Base = declarative_base()
-
-class User(Base):
-    """SQLAlchemy User model for database operations"""
-    __tablename__ = "users"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    name = Column(String, nullable=False)
-    password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
-    is_verified = Column(Boolean, default=False)
-    
-    # In a real application, you would add relationships to other tables here
-    # e.g., assessments, compatibility scores, etc.
 
 # Pydantic models for API request/response validation
 
@@ -44,22 +25,25 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
-class UserResponse(UserBase):
-    id: int
+class UserProfile(BaseModel):
+    id: str
+    email: EmailStr
+    name: str
     created_at: datetime
-    is_verified: bool
-    
-    class Config:
-        orm_mode = True
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
 
 class TokenData(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
 
-class TokenPayload(BaseModel):
-    sub: str  # User ID as subject
-    exp: Optional[int] = None  # Expiration time
-
-class RefreshToken(BaseModel):
+class RefreshTokenRequest(BaseModel):
     refresh_token: str
