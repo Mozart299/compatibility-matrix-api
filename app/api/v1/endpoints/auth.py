@@ -20,34 +20,56 @@ async def register_user(
         auth_response = supabase.auth.sign_up({
             "email": user_in.email,
             "password": user_in.password
+
         })
         
-        # If registration successful, create user metadata in profiles table
-        if auth_response.user:
-            user_id = auth_response.user.id
-            
-            # Insert user profile into the 'profiles' table
-            profile_data = {
-                "id": user_id,  # Use the same ID as auth
-                "email": user_in.email,
-                "name": user_in.name,
-                "created_at": 'now()'  # Use PostgreSQL function
-            }
-            
-            # Insert into profiles table
-            supabase.table('profiles').insert(profile_data).execute()
-            
-            return {
-                "detail": "Registration successful. Please check your email for verification.",
-                "user_id": user_id
-            }
-        else:
+        # Check if registration was successful
+        if not auth_response.user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Registration failed"
+                detail="Registration failed: No user created"
             )
+        
+        # If registration successful, create user metadata in profiles table
+        user_id = auth_response.user.id
+        
+        # Insert user profile into the 'profiles' table
+        profile_data = {
+            "id": user_id,
+            "email": user_in.email,
+            "name": user_in.name,
+        }
+        
+        # Insert into profiles table
+        profile_response = supabase.table('profiles').insert(profile_data).execute()
+        
+        # Check if profile insertion was successful
+        if not profile_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to create user profile"
+            )
+        
+        return {
+            "detail": "Registration successful.",
+            "user_id": user_id
+        }
             
     except Exception as e:
+        # Log the error for debugging
+        print(f"Registration error: {str(e)}")
+        # Handle specific Supabase Auth errors
+        error_message = str(e).lower()
+        if "already registered" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        if "password" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password does not meet requirements"
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Registration failed: {str(e)}"

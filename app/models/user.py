@@ -1,7 +1,7 @@
 # app/models/user.py
 from datetime import datetime
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # Pydantic models for API request/response validation
 
@@ -12,7 +12,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
     
-    @validator('password')
+    @field_validator('password')
     def password_strength(cls, v):
         """Validate password strength"""
         if not any(char.isdigit() for char in v):
