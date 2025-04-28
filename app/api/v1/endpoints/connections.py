@@ -307,84 +307,88 @@ async def get_suggested_connections(
     try:
         user_id = current_user.id
         
+        # Get users with completed assessments (potential connections)
         users_response = supabase.table('user_assessments') \
             .select('user_id') \
             .eq('status', 'completed') \
-            .not_('user_id', 'eq', user_id) \
+            .neq('user_id', user_id) \
             .execute()
-
-        if users_response.error:
-            raise HTTPException(status_code=500, detail=users_response.error.message)
-
+            
         if not users_response.data:
             return {"suggestions": []}
-
+            
+        # Get unique user IDs
         potential_user_ids = set(item['user_id'] for item in users_response.data)
         
+        # Get existing connections to exclude them
         connections_response = supabase.table('connections') \
             .select('user_id_sender, user_id_receiver') \
             .or_(f'user_id_sender.eq.{user_id},user_id_receiver.eq.{user_id}') \
             .execute()
-
-        if connections_response.error:
-            raise HTTPException(status_code=500, detail=connections_response.error.message)
-
+            
+        # Extract the other user IDs from connections
         connected_user_ids = set()
         for conn in connections_response.data:
             if conn['user_id_sender'] == user_id:
                 connected_user_ids.add(conn['user_id_receiver'])
             else:
                 connected_user_ids.add(conn['user_id_sender'])
-
+                
+        # Filter out already connected users
         available_user_ids = potential_user_ids - connected_user_ids
-
+        
         if not available_user_ids:
             return {"suggestions": []}
-
+            
+        # Get compatibility scores for these users
+        suggestions = []
+        
+        # Get profiles for these users
         profiles_response = supabase.table('profiles') \
             .select('id, name, avatar_url') \
             .in_('id', list(available_user_ids)) \
             .execute()
-
-        if profiles_response.error:
-            raise HTTPException(status_code=500, detail=profiles_response.error.message)
-
+            
+        # Create a mapping of user IDs to profiles
         profiles_map = {profile['id']: profile for profile in profiles_response.data}
-
-        suggestions = []
-
+        
+        # For each potential user, check compatibility
         for other_user_id in available_user_ids:
+            # Ensure user_id_a is always lexicographically less than user_id_b
             user_id_a = user_id if user_id < other_user_id else other_user_id
             user_id_b = other_user_id if user_id < other_user_id else user_id
-
+            
             compatibility_response = supabase.table('compatibility_scores') \
-                .select('overall_score') \
+                .select('overall_score, strengths, challenges, dimension_scores') \
                 .eq('user_id_a', user_id_a) \
                 .eq('user_id_b', user_id_b) \
                 .execute()
-
-            if compatibility_response.error:
-                continue  # Skip if error
-
-            if compatibility_response.data:
-                score = compatibility_response.data[0]['overall_score']
-                if score >= min_score:
-                    profile = profiles_map.get(other_user_id)
-                    if profile:
-                        suggestions.append({
-                            "user_id": profile['id'],
-                            "name": profile['name'],
-                            "avatar_url": profile.get('avatar_url'),
-                            "compatibility_score": score
-                        })
-
-            if len(suggestions) >= limit:
-                break  # Respect limit
-
+                
+            # Skip if no compatibility data or score is below minimum
+            if not compatibility_response.data:
+                continue
+                
+            compatibility = compatibility_response.data[0]
+            
+            if min_score is not None and compatibility['overall_score'] < min_score:
+                continue
+                
+            # Get profile data for this user
+            profile = profiles_map.get(other_user_id, {'name': 'Unknown User', 'avatar_url': None})
+            
+            suggestions.append({
+                "user_id": other_user_id,
+                "name": profile['name'],
+                "avatar_url": profile.get('avatar_url'),
+                "compatibility": compatibility
+            })
+        
+        # Sort by compatibility score (highest first) and limit results
+        suggestions.sort(key=lambda x: x['compatibility']['overall_score'], reverse=True)
+        suggestions = suggestions[:limit]
+        
         return {"suggestions": suggestions}
-
-    except HTTPException as he:
-        raise he
+        
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
