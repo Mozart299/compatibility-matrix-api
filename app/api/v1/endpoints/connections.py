@@ -1,7 +1,8 @@
-
-from fastapi import APIRouter, Depends, HTTPException, status
+# app/api/v1/endpoints/connections.py
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Dict, Any, List, Optional
 from supabase import Client
+from fastapi import Depends, HTTPException, status, Header
 
 from app.api.dependencies.auth import get_current_user
 from app.db.supabase import get_supabase, get_admin_supabase
@@ -11,10 +12,15 @@ router = APIRouter()
 @router.get("/")
 async def get_connections(
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase),
+    supabase: Client = Depends(get_admin_supabase),
     status: Optional[str] = None
 ):
-    """Get all connections for the current user"""
+    """
+    Get all connections for the current user
+    
+    Optional query parameter:
+    - status: Filter by connection status ('pending', 'accepted', 'declined')
+    """
     try:
         user_id = current_user.id
         
@@ -102,7 +108,8 @@ async def get_connections(
 async def send_connection_request(
     request_data: Dict[str, Any],
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase)
+    authorization: Optional[str] = Header(None),
+    supabase: Client = Depends(get_admin_supabase)
 ):
     """Send a connection request to another user"""
     try:
@@ -113,6 +120,13 @@ async def send_connection_request(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="user_id is required"
+            )
+            
+        # Prevent sending request to self
+        if user_id == receiver_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot send connection request to yourself"
             )
             
         # Check if the user exists
@@ -129,11 +143,10 @@ async def send_connection_request(
             
         # Check if a connection already exists
         existing_connection = supabase.table('connections') \
-            .select('id, status') \
-            .or_(
-                f'and(user_id_sender.eq.{user_id},user_id_receiver.eq.{receiver_id})',
-                f'and(user_id_sender.eq.{receiver_id},user_id_receiver.eq.{user_id})'
-            ) \
+            .select('id, status, user_id_sender, user_id_receiver') \
+            .or_(f'user_id_sender.eq.{user_id},user_id_receiver.eq.{user_id}') \
+            .in_('user_id_receiver', [receiver_id]) \
+            .in_('user_id_sender', [receiver_id]) \
             .execute()
             
         if existing_connection.data:
@@ -151,6 +164,7 @@ async def send_connection_request(
         new_connection = {
             "user_id_sender": user_id,
             "user_id_receiver": receiver_id,
+            "initiated_by": user_id,
             "status": "pending",
             "created_at": 'now()',
             "updated_at": 'now()'
@@ -208,7 +222,7 @@ async def respond_to_connection_request(
         if not connection_response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Connection request not found or not pending"
+                detail="Connection request not found, not pending, or you're not the receiver"
             )
             
         connection = connection_response.data[0]
@@ -232,11 +246,47 @@ async def respond_to_connection_request(
             
         # If accepted, trigger compatibility calculation
         if action == "accept":
-            # This would typically be handled as a background job
-            # For simplicity, we'll just return a message here
+            sender_id = connection['user_id_sender']
+            
+            # In a real implementation, this would be a background job
+            # For this MVP, we'll just update any existing compatibility data or create it if needed
+            try:
+                # Ensure user_id_a is lexicographically less than user_id_b (database constraint)
+                user_id_a = user_id if user_id < sender_id else sender_id
+                user_id_b = sender_id if user_id < sender_id else user_id
+                
+                # Check for existing compatibility data
+                compatibility_exists = supabase.table('compatibility_scores') \
+                    .select('id') \
+                    .eq('user_id_a', user_id_a) \
+                    .eq('user_id_b', user_id_b) \
+                    .execute()
+                
+                # If no compatibility data exists, we need to create initial data
+                # In a real app, we would calculate real compatibility based on assessments
+                if not compatibility_exists.data:
+                    # Create a basic entry with placeholder scores
+                    compatibility_data = {
+                        'user_id_a': user_id_a,
+                        'user_id_b': user_id_b,
+                        'overall_score': 70,  # Placeholder score
+                        'dimension_scores': [
+                            {'dimension_id': 'personality', 'name': 'Personality Traits', 'score': 75},
+                            {'dimension_id': 'values', 'name': 'Values & Beliefs', 'score': 68},
+                            {'dimension_id': 'interests', 'name': 'Interests', 'score': 72}
+                        ],
+                        'created_at': 'now()',
+                        'updated_at': 'now()'
+                    }
+                    
+                    supabase.table('compatibility_scores').insert(compatibility_data).execute()
+            except Exception as calc_err:
+                # Don't fail the request if compatibility calculation fails
+                print(f"Error calculating compatibility: {str(calc_err)}")
+            
             return {
                 "success": True,
-                "message": "Connection request accepted, compatibility calculation will be processed",
+                "message": "Connection request accepted",
                 "connection": update_response.data[0]
             }
         else:
@@ -260,13 +310,13 @@ async def remove_connection(
     current_user: Dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase)
 ):
-    """Remove a connection"""
+    """Remove a connection or cancel a request"""
     try:
         user_id = current_user.id
         
         # Get the connection and ensure the current user is part of it
         connection_response = supabase.table('connections') \
-            .select('id, user_id_sender, user_id_receiver') \
+            .select('id, user_id_sender, user_id_receiver, status') \
             .eq('id', connection_id) \
             .or_(f'user_id_sender.eq.{user_id},user_id_receiver.eq.{user_id}') \
             .execute()
@@ -277,15 +327,26 @@ async def remove_connection(
                 detail="Connection not found"
             )
             
+        connection = connection_response.data[0]
+        
         # Delete the connection
         delete_response = supabase.table('connections') \
             .delete() \
             .eq('id', connection_id) \
             .execute()
+        
+        # Determine appropriate message based on connection status and role
+        is_sender = connection['user_id_sender'] == user_id
+        status_message = connection['status']
+        
+        if status_message == 'pending':
+            message = "Connection request canceled" if is_sender else "Connection request declined"
+        else:
+            message = "Connection removed successfully"
             
         return {
             "success": True,
-            "message": "Connection removed successfully"
+            "message": message
         }
         
     except HTTPException as he:
@@ -300,8 +361,8 @@ async def remove_connection(
 async def get_suggested_connections(
     current_user: Dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
-    limit: int = 10,
-    min_score: Optional[int] = 70
+    limit: int = Query(10, ge=1, le=50),
+    min_score: Optional[int] = Query(None, ge=0, le=100)
 ):
     """Get suggested connections based on compatibility scores"""
     try:
@@ -322,17 +383,21 @@ async def get_suggested_connections(
         
         # Get existing connections to exclude them
         connections_response = supabase.table('connections') \
-            .select('user_id_sender, user_id_receiver') \
+            .select('user_id_sender, user_id_receiver, status') \
             .or_(f'user_id_sender.eq.{user_id},user_id_receiver.eq.{user_id}') \
             .execute()
             
-        # Extract the other user IDs from connections
+        # Extract the other user IDs from connections and their status
         connected_user_ids = set()
+        pending_user_ids = set()
+        
         for conn in connections_response.data:
-            if conn['user_id_sender'] == user_id:
-                connected_user_ids.add(conn['user_id_receiver'])
+            other_id = conn['user_id_receiver'] if conn['user_id_sender'] == user_id else conn['user_id_sender']
+            
+            if conn['status'] == 'pending':
+                pending_user_ids.add(other_id)
             else:
-                connected_user_ids.add(conn['user_id_sender'])
+                connected_user_ids.add(other_id)
                 
         # Filter out already connected users
         available_user_ids = potential_user_ids - connected_user_ids
@@ -340,7 +405,7 @@ async def get_suggested_connections(
         if not available_user_ids:
             return {"suggestions": []}
             
-        # Get compatibility scores for these users
+        # Get suggestions
         suggestions = []
         
         # Get profiles for these users
@@ -364,7 +429,7 @@ async def get_suggested_connections(
                 .eq('user_id_b', user_id_b) \
                 .execute()
                 
-            # Skip if no compatibility data or score is below minimum
+            # If no compatibility data, or score is below minimum, skip
             if not compatibility_response.data:
                 continue
                 
@@ -376,11 +441,15 @@ async def get_suggested_connections(
             # Get profile data for this user
             profile = profiles_map.get(other_user_id, {'name': 'Unknown User', 'avatar_url': None})
             
+            # Add pending status flag if the user has a pending request
+            pending = other_user_id in pending_user_ids
+            
             suggestions.append({
                 "user_id": other_user_id,
                 "name": profile['name'],
                 "avatar_url": profile.get('avatar_url'),
-                "compatibility": compatibility
+                "compatibility": compatibility,
+                "has_pending_request": pending
             })
         
         # Sort by compatibility score (highest first) and limit results
