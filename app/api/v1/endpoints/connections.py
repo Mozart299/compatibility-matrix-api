@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Dict, Any, List, Optional
 from supabase import Client
+from fastapi import Depends, HTTPException, status, Header
 
 from app.api.dependencies.auth import get_current_user
 from app.db.supabase import get_supabase, get_admin_supabase
@@ -11,7 +12,7 @@ router = APIRouter()
 @router.get("/")
 async def get_connections(
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase),
+    supabase: Client = Depends(get_admin_supabase),
     status: Optional[str] = None
 ):
     """
@@ -107,7 +108,8 @@ async def get_connections(
 async def send_connection_request(
     request_data: Dict[str, Any],
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase)
+    authorization: Optional[str] = Header(None),
+    supabase: Client = Depends(get_admin_supabase)
 ):
     """Send a connection request to another user"""
     try:
@@ -141,11 +143,10 @@ async def send_connection_request(
             
         # Check if a connection already exists
         existing_connection = supabase.table('connections') \
-            .select('id, status') \
-            .or_(
-                f'and(user_id_sender.eq.{user_id},user_id_receiver.eq.{receiver_id})',
-                f'and(user_id_sender.eq.{receiver_id},user_id_receiver.eq.{user_id})'
-            ) \
+            .select('id, status, user_id_sender, user_id_receiver') \
+            .or_(f'user_id_sender.eq.{user_id},user_id_receiver.eq.{user_id}') \
+            .in_('user_id_receiver', [receiver_id]) \
+            .in_('user_id_sender', [receiver_id]) \
             .execute()
             
         if existing_connection.data:
@@ -163,6 +164,7 @@ async def send_connection_request(
         new_connection = {
             "user_id_sender": user_id,
             "user_id_receiver": receiver_id,
+            "initiated_by": user_id,
             "status": "pending",
             "created_at": 'now()',
             "updated_at": 'now()'
