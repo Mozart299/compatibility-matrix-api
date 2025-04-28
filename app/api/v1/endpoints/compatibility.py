@@ -25,30 +25,55 @@ async def get_compatibility_matrix(
     try:
         user_id = current_user.id
         
-        # First, get users who have completed assessments
-        assessments_query = supabase.table('user_assessments') \
-            .select('user_id') \
-            .eq('status', 'completed')
-            
+        # Validate dimension_id if provided
         if dimension_id:
-            assessments_query = assessments_query.eq('dimension_id', dimension_id)
-            
-        assessments_response = assessments_query.execute()
+            dimension_check = supabase.table('assessment_dimensions') \
+                .select('id') \
+                .eq('id', dimension_id) \
+                .execute()
+                
+            if not dimension_check.data or len(dimension_check.data) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Dimension not found"
+                )
+        
+        # Get users who have completed assessments with simplified logic
+        if dimension_id:
+            # Get users who have completed this specific dimension
+            assessments_response = supabase.table('user_assessments') \
+                .select('user_id') \
+                .eq('status', 'completed') \
+                .eq('dimension_id', dimension_id) \
+                .execute()
+        else:
+            # Get users who have completed any assessment
+            assessments_response = supabase.table('user_assessments') \
+                .select('user_id') \
+                .eq('status', 'completed') \
+                .execute()
         
         # Extract unique user IDs who have completed assessments
         user_ids = list(set(assessment['user_id'] for assessment in assessments_response.data))
         
-        # If filtering by dimension, we need to verify users have completed this specific dimension
-        users_with_dimension = set()
-        if dimension_id:
-            for user_id in user_ids:
-                dimension_completed = any(
-                    assessment['user_id'] == user_id and assessment['dimension_id'] == dimension_id
-                    for assessment in assessments_response.data
-                )
-                if dimension_completed:
-                    users_with_dimension.add(user_id)
-            user_ids = list(users_with_dimension)
+        # Handle case with no users
+        if len(user_ids) == 0:
+            dimension_info = None
+            if dimension_id:
+                dimension_response = supabase.table('assessment_dimensions') \
+                    .select('*') \
+                    .eq('id', dimension_id) \
+                    .execute()
+                    
+                if dimension_response.data:
+                    dimension_info = dimension_response.data[0]
+                    
+            return {
+                "matrix": [],
+                "dimension": dimension_info,
+                "total_users": 0,
+                "message": "No users have completed this dimension's assessment yet."
+            }
         
         # Get all relevant users' profiles
         profiles_response = supabase.table('profiles') \
@@ -164,10 +189,21 @@ async def get_compatibility_matrix(
             "total_users": len(profiles)
         }
         
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        # Add detailed error information for debugging
+        error_detail = f"Error fetching compatibility matrix: {str(e)}\n"
+        error_detail += f"User ID: {user_id}, "
+        error_detail += f"Dimension ID: {dimension_id}, "
+        error_detail += f"Min Score: {min_score}"
+        
+        print(error_detail)  # For server logs
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching compatibility matrix: {str(e)}"
+            detail="Error fetching compatibility matrix. Please try again."
         )
 
 @router.get("/{user_id}")
@@ -286,6 +322,7 @@ async def get_compatibility_with_user(
         # Get dimension information for each dimension score
         dimension_ids = [d["dimension_id"] for d in compatibility_data.get("dimension_scores", [])]
         
+        dimensions_map = {}
         if dimension_ids:
             dimensions_response = supabase.table('assessment_dimensions') \
                 .select('id, name, description') \
@@ -294,20 +331,18 @@ async def get_compatibility_with_user(
                 
             dimensions_map = {d["id"]: d for d in dimensions_response.data}
             
-            # Enhance dimension scores with dimension information
-            enhanced_dimension_scores = []
-            for score in compatibility_data.get("dimension_scores", []):
-                dimension_id = score["dimension_id"]
-                if dimension_id in dimensions_map:
-                    enhanced_dimension_scores.append({
-                        **score,
-                        "name": dimensions_map[dimension_id]["name"],
-                        "description": dimensions_map[dimension_id]["description"]
-                    })
-                else:
-                    enhanced_dimension_scores.append(score)
-        else:
-            enhanced_dimension_scores = compatibility_data.get("dimension_scores", [])
+        # Enhance dimension scores with dimension information
+        enhanced_dimension_scores = []
+        for score in compatibility_data.get("dimension_scores", []):
+            dimension_id = score["dimension_id"]
+            if dimension_id in dimensions_map:
+                enhanced_dimension_scores.append({
+                    **score,
+                    "name": dimensions_map[dimension_id]["name"],
+                    "description": dimensions_map[dimension_id]["description"]
+                })
+            else:
+                enhanced_dimension_scores.append(score)
         
         # Enhance strengths and challenges with dimension information
         enhanced_strengths = []
@@ -346,10 +381,20 @@ async def get_compatibility_with_user(
             }
         }
         
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        # Add detailed error information
+        error_detail = f"Error fetching compatibility data: {str(e)}\n"
+        error_detail += f"Current User ID: {current_user_id}, "
+        error_detail += f"Other User ID: {user_id}"
+        
+        print(error_detail)  # For server logs
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching compatibility data: {str(e)}"
+            detail="Error fetching compatibility data. Please try again."
         )
 
 @router.get("/report/{user_id}")
@@ -387,6 +432,12 @@ async def get_detailed_compatibility_report(
         current_user_interests = current_user_data.get('interests', [])
         other_user_interests = other_user_data.get('interests', [])
         
+        # Handle case where interests might be None instead of empty list
+        if current_user_interests is None:
+            current_user_interests = []
+        if other_user_interests is None:
+            other_user_interests = []
+            
         shared_interests = list(set(current_user_interests) & set(other_user_interests))
         unique_current_interests = list(set(current_user_interests) - set(other_user_interests))
         unique_other_interests = list(set(other_user_interests) - set(current_user_interests))
@@ -428,10 +479,20 @@ async def get_detailed_compatibility_report(
         
         return detailed_report
         
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        # Add detailed error information
+        error_detail = f"Error generating compatibility report: {str(e)}\n"
+        error_detail += f"Current User ID: {current_user.id}, "
+        error_detail += f"Other User ID: {user_id}"
+        
+        print(error_detail)  # For server logs
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating compatibility report: {str(e)}"
+            detail="Error generating compatibility report. Please try again."
         )
 
 def generate_communication_dynamics(user_style, other_style):
