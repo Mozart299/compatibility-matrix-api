@@ -1,4 +1,3 @@
-# app/core/config.py
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 
@@ -10,7 +9,12 @@ class Settings(BaseSettings):
     # Supabase settings
     SUPABASE_URL: str
     SUPABASE_KEY: str
-    SUPABASE_SERVICE_KEY: str  # Service/admin key for server-side operations
+    SUPABASE_SERVICE_KEY: str  
+    
+    # Google OAuth settings
+    GOOGLE_CLIENT_ID: str
+    GOOGLE_CLIENT_SECRET: str
+    GOOGLE_REDIRECT_URI: str = "http://localhost:3000/api/auth/callback/google"
     
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000"]  # React default port
