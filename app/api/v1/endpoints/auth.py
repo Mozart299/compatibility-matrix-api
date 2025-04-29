@@ -1,11 +1,12 @@
 # app/api/v1/endpoints/auth.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from supabase import Client
 from typing import Dict, Any
 
 from app.db.supabase import get_supabase, get_admin_supabase
 from app.models.user import UserCreate, UserLogin, TokenData
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -102,6 +103,73 @@ async def login(
             detail=f"Authentication failed: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+@router.get("/login/google")
+async def login_google(
+    supabase: Client = Depends(get_admin_supabase)
+):
+    """
+    Initiate Google OAuth login flow
+    """
+    try:
+        # Use Supabase to get the Google auth URL
+        auth_url = supabase.auth.get_url_for_provider(
+            "google",
+            {
+                "redirect_to": settings.GOOGLE_REDIRECT_URI,
+                "scopes": "email profile"
+            }
+        )
+        
+        return {"auth_url": auth_url}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error initiating Google auth: {str(e)}"
+        )
+
+@router.post("/callback/google")
+async def google_callback(
+    request: Request,
+    supabase: Client = Depends(get_admin_supabase)
+):
+    """
+    Handle Google OAuth callback
+    """
+    try:
+        # Get the query parameters from the request
+        form_data = await request.form()
+        
+        # Extract code from request
+        code = form_data.get("code")
+        
+        if not code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Authorization code not provided"
+            )
+        
+        # Exchange code for tokens using Supabase
+        auth_response = supabase.auth.exchange_code_for_session({
+            "auth_code": code
+        })
+        
+        # Create JWT token
+        session = auth_response.session
+        access_token = session.access_token
+        refresh_token = session.refresh_token
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error during Google callback: {str(e)}"
+        )
+
 
 @router.post("/refresh", response_model=TokenData)
 async def refresh_token(
