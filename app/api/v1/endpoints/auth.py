@@ -113,16 +113,15 @@ async def login_google(
     """
     try:
         # Use Supabase to get the Google auth URL
-        auth_url = supabase.auth.get_url_for_provider(
-            "google",
-            {
-                "redirect_to": settings.GOOGLE_REDIRECT_URI,
-                "scopes": "email profile"
-            }
-        )
+        auth_url = supabase.auth.sign_in_with_oauth({
+            "provider": "google",
+            "redirect_to": settings.GOOGLE_REDIRECT_URI,
+            "scopes": "email profile"
+        })
         
         return {"auth_url": auth_url}
     except Exception as e:
+        print(f"Error in Google Auth: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error initiating Google auth: {str(e)}"
