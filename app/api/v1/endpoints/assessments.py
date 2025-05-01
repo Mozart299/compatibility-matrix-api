@@ -14,7 +14,7 @@ router = APIRouter()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("assessments_endpoint")
 
-@router.get("/")
+@router.get("")
 async def get_assessments(
     request: Request,
     current_user: Dict = Depends(get_current_user),

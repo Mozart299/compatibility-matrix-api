@@ -9,7 +9,7 @@ from app.db.supabase import get_supabase, get_admin_supabase
 
 router = APIRouter()
 
-@router.get("/")
+@router.get("")
 async def get_connections(
     current_user: Dict = Depends(get_current_user),
     supabase: Client = Depends(get_admin_supabase),
