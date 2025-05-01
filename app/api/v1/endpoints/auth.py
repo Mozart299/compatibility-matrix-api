@@ -116,18 +116,24 @@ async def login_google(
     - code_verifier: Optional PKCE code verifier
     """
     try:
-        # Use Supabase to get the Google auth URL
+        # Configure OAuth options
         options = {
             "provider": "google",
             "redirect_to": settings.GOOGLE_REDIRECT_URI,
             "scopes": "email profile"
         }
         
-        # Include flow_state for code verifier if provided
+        # Include code_verifier for PKCE if provided
         if code_verifier:
-            options["flow_state"] = code_verifier
-            
-        auth_url = supabase.auth.sign_in_with_oauth(options)
+            masked_verifier = f"{code_verifier[:5]}...{code_verifier[-5:]}" if len(code_verifier) > 10 else "***"
+            print(f"Received code_verifier: {masked_verifier}")
+            options["code_verifier"] = code_verifier
+        
+        # Generate OAuth URL using sign_in_with_oauth
+        oauth_response = supabase.auth.sign_in_with_oauth(options)
+        
+        # Extract the URL from the response
+        auth_url = oauth_response.url
         
         return {"auth_url": auth_url}
     except Exception as e:
@@ -153,16 +159,32 @@ async def google_callback(
         if code_verifier:
             masked_verifier = code_verifier[:5] + "..." + code_verifier[-5:] if len(code_verifier) > 10 else "***"
             print(f"Code verifier received: {masked_verifier}")
+        else:
+            print("No code verifier received")
 
         # Exchange code for session using Supabase
-        exchange_params = {
-            "auth_code": code,
-            "provider": "google"
-        }
+        session_response = None
+        
+        # First try with code_verifier if available
         if code_verifier:
-            exchange_params["code_verifier"] = code_verifier
-
-        session_response = supabase.auth.exchange_code_for_session(exchange_params)
+            try:
+                session_response = supabase.auth.exchange_code_for_session({
+                    "auth_code": code,
+                    "code_verifier": code_verifier
+                })
+            except Exception as e:
+                print(f"Failed to exchange with verifier: {str(e)}")
+                session_response = None
+        
+        # Fall back to standard exchange if code_verifier fails or is missing
+        if not session_response:
+            try:
+                session_response = supabase.auth.exchange_code_for_session({
+                    "auth_code": code
+                })
+            except Exception as e:
+                print(f"Failed standard exchange: {str(e)}")
+                raise e
         
         if not session_response or not session_response.session:
             raise HTTPException(
