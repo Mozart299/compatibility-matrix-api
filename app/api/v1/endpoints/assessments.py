@@ -6,7 +6,7 @@ import logging
 import traceback
 
 from app.api.dependencies.auth import get_current_user
-from app.db.supabase import get_supabase
+from app.db.supabase import get_supabase, get_admin_supabase
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ logger = logging.getLogger("assessments_endpoint")
 async def get_assessments(
     request: Request,
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_admin_supabase)
 ):
     """Get all assessments for the current user"""
     try:
@@ -438,7 +438,7 @@ async def submit_response(
 @router.get("/progress")
 async def get_assessment_progress(
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_admin_supabase)
 ):
     """Get overall assessment progress for the user"""
     try:
