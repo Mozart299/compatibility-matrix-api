@@ -12,7 +12,7 @@ router = APIRouter()
 @router.get("/")
 async def get_connections(
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase),
+    supabase: Client = Depends(get_admin_supabase),
     status: Optional[str] = None
 ):
     """
@@ -109,7 +109,7 @@ async def send_connection_request(
     request_data: Dict[str, Any],
     current_user: Dict = Depends(get_current_user),
     authorization: Optional[str] = Header(None),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_admin_supabase)
 ):
     """Send a connection request to another user"""
     try:
