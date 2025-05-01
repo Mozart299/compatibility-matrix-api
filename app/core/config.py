@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     # Google OAuth settings
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
-    GOOGLE_REDIRECT_URI: str = "http://localhost:3000/api/auth/callback/google"
+    GOOGLE_REDIRECT_URI: str
     
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000"]  # React default port
+    BACKEND_CORS_ORIGINS: List[str]
     
     model_config = {
         "env_file": ".env",
