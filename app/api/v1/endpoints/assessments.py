@@ -1,35 +1,74 @@
 # app/api/v1/endpoints/assessments.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from typing import Dict, Any, List, Optional
 from supabase import Client
+import logging
+import traceback
 
 from app.api.dependencies.auth import get_current_user
 from app.db.supabase import get_supabase
 
 router = APIRouter()
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("assessments_endpoint")
+
 @router.get("/")
 async def get_assessments(
+    request: Request,
     current_user: Dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase)
 ):
     """Get all assessments for the current user"""
     try:
+        # Log request information
+        auth_header = request.headers.get("Authorization", "No Auth header")
+        logger.info(f"GET /assessments request received")
+        logger.info(f"Auth header present: {bool(auth_header)}")
+        logger.info(f"Auth header prefix: {auth_header[:15]}..." if auth_header else "No Auth header")
+        
+        # Log user information from the token
+        logger.info(f"User authenticated as: {current_user.id if current_user else 'No user'}")
+        
         user_id = current_user.id
+        logger.info(f"Fetching assessments for user_id: {user_id}")
         
         # Get user's assessment data from Supabase
-        response = supabase.table('user_assessments') \
-            .select('*, assessment_dimensions(*)') \
-            .eq('user_id', user_id) \
-            .execute()
+        try:
+            response = supabase.table('user_assessments') \
+                .select('*, assessment_dimensions(*)') \
+                .eq('user_id', user_id) \
+                .execute()
+            
+            logger.info(f"user_assessments query executed successfully")
+            logger.info(f"Response data length: {len(response.data) if response.data else 0}")
+        except Exception as supabase_error:
+            logger.error(f"Supabase query error: {str(supabase_error)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Database error: {str(supabase_error)}"
+            )
         
         # Get list of all dimensions
-        dimensions_response = supabase.table('assessment_dimensions') \
-            .select('*') \
-            .order('order_index') \
-            .execute()
-        
-        all_dimensions = dimensions_response.data
+        try:
+            dimensions_response = supabase.table('assessment_dimensions') \
+                .select('*') \
+                .order('order_index') \
+                .execute()
+            
+            logger.info(f"assessment_dimensions query executed successfully")
+            logger.info(f"Dimensions data length: {len(dimensions_response.data) if dimensions_response.data else 0}")
+            
+            all_dimensions = dimensions_response.data
+        except Exception as dimensions_error:
+            logger.error(f"Dimensions query error: {str(dimensions_error)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error fetching dimensions: {str(dimensions_error)}"
+            )
         
         # Create a mapping of dimensions that have been started/completed
         assessment_map = {}
@@ -85,7 +124,10 @@ async def get_assessments(
                     progress_sum += assessment['progress']
                     
             overall_progress = int(progress_sum / (total_dimensions * 100) * 100)
-            
+        
+        logger.info(f"Successfully constructed response for user {user_id}")
+        logger.info(f"Total dimensions: {total_dimensions}, Completed: {completed_dimensions}, In progress: {in_progress_dimensions}")
+        
         return {
             "assessments": assessments,
             "overall_progress": overall_progress,
@@ -94,7 +136,12 @@ async def get_assessments(
             "in_progress_dimensions": in_progress_dimensions
         }
         
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        logger.error(f"Unexpected error in get_assessments: {str(e)}")
+        logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching assessments: {str(e)}"
@@ -102,146 +149,47 @@ async def get_assessments(
 
 @router.get("/dimensions")
 async def get_assessment_dimensions(
+    request: Request,
     current_user: Dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase)
 ):
     """Get all assessment dimensions"""
     try:
-        # Get all assessment dimensions
-        response = supabase.table('assessment_dimensions') \
-            .select('*') \
-            .order('order_index') \
-            .execute()
-            
-        return {"dimensions": response.data}
+        # Log request information
+        auth_header = request.headers.get("Authorization", "No Auth header")
+        logger.info(f"GET /assessments/dimensions request received")
+        logger.info(f"Auth header present: {bool(auth_header)}")
+        logger.info(f"User authenticated as: {current_user.id if current_user else 'No user'}")
         
+        try:
+            # Get all assessment dimensions
+            response = supabase.table('assessment_dimensions') \
+                .select('*') \
+                .order('order_index') \
+                .execute()
+            
+            logger.info(f"Dimensions query successful, returned {len(response.data)} records")
+                
+            return {"dimensions": response.data}
+        except Exception as db_error:
+            logger.error(f"Database error in get_assessment_dimensions: {str(db_error)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error fetching dimensions: {str(db_error)}"
+            )
+            
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        logger.error(f"Unexpected error in get_assessment_dimensions: {str(e)}")
+        logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching dimensions: {str(e)}"
         )
-
-@router.post("/start")
-async def start_assessment(
-    assessment_data: Dict[str, Any],
-    current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase)
-):
-    """Start a new assessment or continue an existing one"""
-    try:
-        user_id = current_user.id
-        dimension_id = assessment_data.get("dimension_id")
-        
-        if not dimension_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="dimension_id is required"
-            )
-            
-        # Check if this assessment already exists
-        existing = supabase.table('user_assessments') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .eq('dimension_id', dimension_id) \
-            .execute()
-            
-        if existing.data and len(existing.data) > 0:
-            # Assessment exists, return current state
-            assessment_id = existing.data[0]["id"]
-            
-            # Get dimension info
-            dimension = supabase.table('assessment_dimensions') \
-                .select('*') \
-                .eq('id', dimension_id) \
-                .execute()
-                
-            # Get questions for this dimension
-            questions = supabase.table('assessment_questions') \
-                .select('*') \
-                .eq('dimension_id', dimension_id) \
-                .order('order_index') \
-                .execute()
-                
-            # Check if there are any responses already
-            responses = existing.data[0].get("responses", [])
-            
-            # Get next unanswered question
-            next_question_index = len(responses)
-            next_question = None if next_question_index >= len(questions.data) else questions.data[next_question_index]
-            
-            return {
-                "assessment_id": assessment_id,
-                "status": existing.data[0]["status"],
-                "progress": existing.data[0]["progress"],
-                "dimension": dimension.data[0] if dimension.data else {},
-                "total_questions": len(questions.data),
-                "completed_questions": len(responses),
-                "next_question": next_question,
-                "message": "Assessment already started"
-            }
-            
-        # Get dimension info
-        dimension = supabase.table('assessment_dimensions') \
-            .select('*') \
-            .eq('id', dimension_id) \
-            .execute()
-            
-        if not dimension.data or len(dimension.data) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Dimension not found"
-            )
-            
-        # Get questions for this dimension
-        questions = supabase.table('assessment_questions') \
-            .select('*') \
-            .eq('dimension_id', dimension_id) \
-            .order('order_index') \
-            .execute()
-            
-        if not questions.data or len(questions.data) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No questions found for this dimension"
-            )
-            
-        # Create new assessment
-        new_assessment = {
-            "user_id": user_id,
-            "dimension_id": dimension_id,
-            "status": "in_progress",
-            "progress": 0,
-            "responses": [],  # Empty array to store responses
-            "created_at": 'now()',
-            "updated_at": 'now()'
-        }
-        
-        # Insert new assessment into Supabase
-        response = supabase.table('user_assessments').insert(new_assessment).execute()
-        
-        if not response.data or len(response.data) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create assessment"
-            )
-            
-        return {
-            "assessment_id": response.data[0]["id"],
-            "status": "in_progress",
-            "progress": 0,
-            "dimension": dimension.data[0],
-            "total_questions": len(questions.data),
-            "completed_questions": 0,
-            "next_question": questions.data[0] if questions.data else None,
-            "message": "Assessment started successfully"
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error starting assessment: {str(e)}"
-        )
-
+    
 @router.get("/{assessment_id}")
 async def get_assessment(
     assessment_id: str,
