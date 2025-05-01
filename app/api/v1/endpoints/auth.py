@@ -1,8 +1,8 @@
 # app/api/v1/endpoints/auth.py
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Query, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from supabase import Client
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from app.db.supabase import get_supabase, get_admin_supabase
 from app.models.user import UserCreate, UserLogin, TokenData
@@ -106,18 +106,28 @@ async def login(
 
 @router.get("/login/google")
 async def login_google(
+    code_verifier: Optional[str] = Query(None),
     supabase: Client = Depends(get_admin_supabase)
 ):
     """
     Initiate Google OAuth login flow
+    
+    Optional query parameter:
+    - code_verifier: Optional PKCE code verifier
     """
     try:
         # Use Supabase to get the Google auth URL
-        auth_url = supabase.auth.sign_in_with_oauth({
+        options = {
             "provider": "google",
             "redirect_to": settings.GOOGLE_REDIRECT_URI,
             "scopes": "email profile"
-        })
+        }
+        
+        # Include flow_state for code verifier if provided
+        if code_verifier:
+            options["flow_state"] = code_verifier
+            
+        auth_url = supabase.auth.sign_in_with_oauth(options)
         
         return {"auth_url": auth_url}
     except Exception as e:
@@ -129,96 +139,88 @@ async def login_google(
 
 @router.post("/callback/google")
 async def google_callback(
-    request: Request,
+    code: str = Form(...),
+    code_verifier: Optional[str] = Form(None),
     supabase: Client = Depends(get_admin_supabase)
 ):
     """
     Handle Google OAuth callback
+    
+    This endpoint is called by the Next.js frontend after receiving the auth code from Google.
     """
     try:
-        # Get the query parameters from the request
-        form_data = await request.form()
+        print(f"Received Google auth code: {code[:10]}...")
+        if code_verifier:
+            masked_verifier = code_verifier[:5] + "..." + code_verifier[-5:] if len(code_verifier) > 10 else "***"
+            print(f"Code verifier received: {masked_verifier}")
+
+        # Exchange code for session using Supabase
+        exchange_params = {
+            "auth_code": code,
+            "provider": "google"
+        }
+        if code_verifier:
+            exchange_params["code_verifier"] = code_verifier
+
+        session_response = supabase.auth.exchange_code_for_session(exchange_params)
         
-        # Extract code from request
-        code = form_data.get("code")
-        
-        if not code:
+        if not session_response or not session_response.session:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Authorization code not provided"
+                detail="Failed to authenticate with Google: No session returned"
             )
-        
-        # Exchange code for tokens using Supabase
-        auth_response = supabase.auth.exchange_code_for_session({
-            "auth_code": code
-        })
-        
-        # Create JWT token
-        session = auth_response.session
+
+        session = session_response.session
         access_token = session.access_token
         refresh_token = session.refresh_token
-        
+
+        # Check if user exists in profiles table, create if not
+        try:
+            user = supabase.auth.get_user(access_token)
+            user_id = user.user.id
+            email = user.user.email
+
+            # Extract name from user metadata or fallback to email username
+            name = None
+            if user.user.user_metadata:
+                name = (
+                    user.user.user_metadata.get("full_name")
+                    or user.user.user_metadata.get("name")
+                    or user.user.user_metadata.get("preferred_username")
+                )
+            if not name:
+                name = email.split("@")[0]
+
+            # Check if profile exists
+            profile_check = supabase.table("profiles").select("id").eq("id", user_id).execute()
+
+            if not profile_check.data:
+                # Create a new profile
+                profile_data = {
+                    "id": user_id,
+                    "email": email,
+                    "name": name,
+                    "created_at": "now()",
+                    "updated_at": "now()"
+                }
+                supabase.table("profiles").insert(profile_data).execute()
+                print(f"Created new profile for user: {user_id}")
+            else:
+                print(f"User profile already exists: {user_id}")
+
+        except Exception as profile_error:
+            print(f"Error creating/checking profile: {str(profile_error)}")
+            # Continue with authentication even if profile creation fails
+
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer"
         }
+
     except Exception as e:
+        print(f"Error in Google callback: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error during Google callback: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error handling Google callback: {str(e)}"
         )
-
-
-@router.post("/refresh", response_model=TokenData)
-async def refresh_token(
-    refresh_token: Dict[str, str],
-    supabase: Client = Depends(get_supabase)
-):
-    """Refresh access token using refresh token"""
-    try:
-        # Use Supabase to refresh the token
-        auth_response = supabase.auth.refresh_session(refresh_token["refresh_token"])
-        
-        # Extract new tokens
-        session = auth_response.session
-        
-        return {
-            "access_token": session.access_token,
-            "refresh_token": session.refresh_token,
-            "token_type": "bearer"
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token refresh failed: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-@router.post("/logout")
-async def logout(
-    supabase: Client = Depends(get_supabase)
-):
-    """Logout user - invalidate session on Supabase"""
-    try:
-        # Sign out from Supabase
-        supabase.auth.sign_out()
-        return {"detail": "Successfully logged out"}
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Logout failed: {str(e)}"
-        )
-
-@router.post("/send-reset-password")
-async def send_reset_password(
-    email: Dict[str, str],
-    supabase: Client = Depends(get_supabase)
-):
-    """Send password reset email"""
-    try:
-        supabase.auth.reset_password_email(email["email"])
-        return {"detail": "Password reset email sent"}
-    except Exception as e:
-        # Don't reveal if the email exists or not for security
-        return {"detail": "If the email exists, a password reset link has been sent"}
