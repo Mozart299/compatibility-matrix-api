@@ -147,6 +147,174 @@ async def get_assessments(
             detail=f"Error fetching assessments: {str(e)}"
         )
 
+
+@router.post("/start")
+async def start_assessment(
+    request_data: Dict[str, Any],
+    current_user: Dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """Start a new assessment for a dimension"""
+    try:
+        user_id = current_user.id
+        dimension_id = request_data.get("dimension_id")
+        
+        if not dimension_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dimension_id is required"
+            )
+            
+        # Check if the dimension exists
+        dimension_response = supabase.table('assessment_dimensions') \
+            .select('*') \
+            .eq('id', dimension_id) \
+            .execute()
+            
+        if not dimension_response.data or len(dimension_response.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Dimension not found"
+            )
+            
+        # Check if an assessment already exists and is in progress
+        existing_assessment = supabase.table('user_assessments') \
+            .select('*') \
+            .eq('user_id', user_id) \
+            .eq('dimension_id', dimension_id) \
+            .execute()
+            
+        if existing_assessment.data and len(existing_assessment.data) > 0:
+            assessment = existing_assessment.data[0]
+            
+            # If assessment is completed, create a new one (retake)
+            if assessment['status'] == 'completed':
+                # Create new assessment
+                new_assessment = {
+                    "user_id": user_id,
+                    "dimension_id": dimension_id,
+                    "status": "in_progress",
+                    "progress": 0,
+                    "responses": [],
+                    "created_at": 'now()',
+                    "updated_at": 'now()'
+                }
+                
+                insert_response = supabase.table('user_assessments').insert(new_assessment).execute()
+                
+                if not insert_response.data or len(insert_response.data) == 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create new assessment"
+                    )
+                    
+                new_assessment_id = insert_response.data[0]['id']
+                
+                # Get the first question
+                questions_response = supabase.table('assessment_questions') \
+                    .select('*') \
+                    .eq('dimension_id', dimension_id) \
+                    .order('order_index') \
+                    .execute()
+                    
+                next_question = None
+                if questions_response.data and len(questions_response.data) > 0:
+                    next_question = questions_response.data[0]
+                
+                return {
+                    "assessment_id": new_assessment_id,
+                    "dimension": dimension_response.data[0],
+                    "status": "in_progress",
+                    "progress": 0,
+                    "completed_questions": 0,
+                    "total_questions": len(questions_response.data),
+                    "next_question": next_question
+                }
+            else:
+                # Return existing in-progress assessment
+                assessment_id = assessment['id']
+                
+                # Get current responses
+                responses = assessment.get('responses', [])
+                num_responses = len(responses)
+                
+                # Get questions to determine next question and total count
+                questions_response = supabase.table('assessment_questions') \
+                    .select('*') \
+                    .eq('dimension_id', dimension_id) \
+                    .order('order_index') \
+                    .execute()
+                    
+                total_questions = len(questions_response.data)
+                next_question = None
+                
+                if num_responses < total_questions:
+                    next_question = questions_response.data[num_responses]
+                
+                return {
+                    "assessment_id": assessment_id,
+                    "dimension": dimension_response.data[0],
+                    "status": assessment['status'],
+                    "progress": assessment['progress'],
+                    "completed_questions": num_responses,
+                    "total_questions": total_questions,
+                    "next_question": next_question
+                }
+        
+        # Create a new assessment
+        new_assessment = {
+            "user_id": user_id,
+            "dimension_id": dimension_id,
+            "status": "in_progress",
+            "progress": 0,
+            "responses": [],
+            "created_at": 'now()',
+            "updated_at": 'now()'
+        }
+        
+        insert_response = supabase.table('user_assessments').insert(new_assessment).execute()
+        
+        if not insert_response.data or len(insert_response.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create assessment"
+            )
+            
+        new_assessment_id = insert_response.data[0]['id']
+        
+        # Get the first question
+        questions_response = supabase.table('assessment_questions') \
+            .select('*') \
+            .eq('dimension_id', dimension_id) \
+            .order('order_index') \
+            .execute()
+            
+        next_question = None
+        if questions_response.data and len(questions_response.data) > 0:
+            next_question = questions_response.data[0]
+        
+        return {
+            "assessment_id": new_assessment_id,
+            "dimension": dimension_response.data[0],
+            "status": "in_progress",
+            "progress": 0,
+            "completed_questions": 0,
+            "total_questions": len(questions_response.data),
+            "next_question": next_question
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Add detailed error logs
+        logger.error(f"Error starting assessment: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error starting assessment: {str(e)}"
+        )
+
 @router.get("/dimensions")
 async def get_assessment_dimensions(
     request: Request,
