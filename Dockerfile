@@ -9,9 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
 # Install system dependencies
-RUN apk update \
-    && apk add --no-cache gcc musl-dev \
-    && rm -rf /var/cache/apk/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
 COPY requirements.txt .
