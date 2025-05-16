@@ -22,7 +22,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:8000",
         "https://compatibility-matrix.vercel.app",
-        "https://random-maria-mozart299-46512b0e.koyeb.app"
+        "https://compatibility-matrix-api.onrender.com"
     ]
     
     model_config = {
