@@ -8,6 +8,38 @@ from app.db.supabase import get_supabase
 
 router = APIRouter()
 
+def identify_strengths_and_challenges(dimension_scores: List[Dict[str, any]]) -> tuple[List[Dict[str, any]], List[Dict[str, any]]]:
+    """
+    Identify strengths and challenges based on dimension scores.
+    Strengths: Scores >= 75
+    Challenges: Scores < 50
+    """
+    strengths: List[Dict[str, any]] = []
+    challenges: List[Dict[str, any]] = []
+    
+    for score in dimension_scores:
+        dimension_id = score.get('dimension_id')
+        score_value = score.get('score')
+        name = score.get('name', 'Unknown Dimension')
+        
+        if score_value is not None:
+            if score_value >= 75:
+                strengths.append({
+                    'dimension_id': dimension_id,
+                    'name': name,
+                    'score': score_value,
+                    'description': f"Strong compatibility in {name}"
+                })
+            elif score_value < 50:
+                challenges.append({
+                    'dimension_id': dimension_id,
+                    'name': name,
+                    'score': score_value,
+                    'description': f"Potential challenge in {name}"
+                })
+    
+    return strengths, challenges
+
 @router.get("/matrix")
 async def get_compatibility_matrix(
     current_user: Dict = Depends(get_current_user),
@@ -222,6 +254,236 @@ async def get_compatibility_with_user(
             .eq('id', user_id) \
             .execute()
             
+        if not user_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+            
+        other_user = user_response.data[0]
+        
+        # Get compatibility scores between the two users
+        user_id_a = min(current_user_id, user_id)
+        user_id_b = max(current_user_id, user_id)
+            
+        response = supabase.table('compatibility_scores') \
+            .select('*') \
+            .eq('user_id_a', user_id_a) \
+            .eq('user_id_b', user_id_b) \
+            .execute()
+            
+        # If no compatibility data exists yet
+        if not response.data:
+            # Check if both users have completed any assessments
+            assessments_query = supabase.table('user_assessments') \
+                .select('dimension_id, user_id') \
+                .eq('status', 'completed') \
+                .in_('user_id', [current_user_id, user_id]) \
+                .execute()
+                
+            if not assessments_query.data:
+                return {
+                    "overall_score": 0,
+                    "dimension_scores": [],
+                    "strengths": [],
+                    "challenges": [],
+                    "completed_assessments": 0,
+                    "other_user": {
+                        "id": user_id,
+                        "name": other_user['name'],
+                        "avatar_url": other_user.get('avatar_url')
+                    },
+                    "message": "Complete assessments to see compatibility scores"
+                }
+                
+            # Check for dimensions that both users have completed
+            current_user_dimensions = [a['dimension_id'] for a in assessments_query.data if a['user_id'] == current_user_id]
+            other_user_dimensions = [a['dimension_id'] for a in assessments_query.data if a['user_id'] == user_id]
+            
+            shared_dimensions = set(current_user_dimensions).intersection(set(other_user_dimensions))
+            
+            if not shared_dimensions:
+                return {
+                    "overall_score": 0,
+                    "dimension_scores": [],
+                    "strengths": [],
+                    "challenges": [],
+                    "completed_assessments": len(current_user_dimensions),
+                    "other_user_assessments": len(other_user_dimensions),
+                    "shared_assessments": 0,
+                    "other_user": {
+                        "id": user_id,
+                        "name": other_user['name'],
+                        "avatar_url": other_user.get('avatar_url')
+                    },
+                    "message": "No shared completed assessments yet"
+                }
+                
+            # Get the dimensions information
+            dimensions_response = supabase.table('assessment_dimensions') \
+                .select('id, name, description') \
+                .in_('id', list(shared_dimensions)) \
+                .execute()
+                
+            return {
+                "overall_score": 0,
+                "dimension_scores": [],
+                "strengths": [],
+                "challenges": [],
+                "completed_assessments": len(current_user_dimensions),
+                "other_user_assessments": len(other_user_dimensions),
+                "shared_assessments": len(shared_dimensions),
+                "shared_dimensions": dimensions_response.data or [],
+                "other_user": {
+                    "id": user_id,
+                    "name": other_user['name'],
+                    "avatar_url": other_user.get('avatar_url')
+                },
+                "message": "Compatibility calculation in progress"
+            }
+        
+        # Initialize compatibility data
+        compatibility_data = response.data[0]
+        dimension_scores = compatibility_data.get("dimension_scores", [])
+        
+        # Get dimension information
+        dimension_ids = [d["dimension_id"] for d in dimension_scores if d.get("dimension_id")]
+        dimensions_map = {}
+        if dimension_ids:
+            dimensions_response = supabase.table('assessment_dimensions') \
+                .select('id, name, description') \
+                .in_('id', dimension_ids) \
+                .execute()
+            dimensions_map = {d["id"]: d for d in dimensions_response.data or []}
+        
+        # Enhance dimension scores
+        enhanced_dimension_scores = []
+        for score in dimension_scores:
+            dimension_id = score.get("dimension_id")
+            enhanced_score = {"dimension_id": dimension_id, "score": score.get("score")}
+            if dimension_id in dimensions_map:
+                enhanced_score.update({
+                    "name": dimensions_map[dimension_id]["name"],
+                    "description": dimensions_map[dimension_id]["description"]
+                })
+            enhanced_dimension_scores.append(enhanced_score)
+        
+        # Enhance strengths and challenges
+        enhanced_strengths = []
+        for strength in compatibility_data.get("strengths", []):
+            dimension_id = strength.get("dimension_id")
+            enhanced_strength = {**strength}
+            if dimension_id in dimensions_map:
+                enhanced_strength.update({
+                    "name": dimensions_map[dimension_id]["name"],
+                    "description": dimensions_map[dimension_id]["description"]
+                })
+            enhanced_strengths.append(enhanced_strength)
+                
+        enhanced_challenges = []
+        for challenge in compatibility_data.get("challenges", []):
+            dimension_id = challenge.get("dimension_id")
+            enhanced_challenge = {**challenge}
+            if dimension_id in dimensions_map:
+                enhanced_challenge.update({
+                    "name": dimensions_map[dimension_id]["name"],
+                    "description": dimensions_map[dimension_id]["description"]
+                })
+            enhanced_challenges.append(enhanced_challenge)
+        
+        # After retrieving basic compatibility data, check for biometric compatibility
+        try:
+            if response.data and len(response.data) > 0:
+                compatibility_data = response.data[0]
+                
+                # Check for biometric compatibility
+                if user_id_a < user_id_b:
+                    bio_user_a = user_id_a
+                    bio_user_b = user_id_b
+                else:
+                    bio_user_a = user_id_b
+                    bio_user_b = user_id_a
+                
+                bio_response = supabase.table('biometric_compatibility_scores') \
+                    .select('*') \
+                    .eq('user_id_a', bio_user_a) \
+                    .eq('user_id_b', bio_user_b) \
+                    .eq('biometric_type', 'hrv') \
+                    .execute()
+                
+                if bio_response.data and len(bio_response.data) > 0:
+                    bio_data = bio_response.data[0]
+                    
+                    # Add biometric dimension to dimension scores if not already present
+                    dimension_scores = enhanced_dimension_scores
+                    bio_index = next((i for i, d in enumerate(dimension_scores) 
+                                   if d.get('dimension_id') == 'biometric'), -1)
+                    
+                    if bio_index == -1:
+                        # Add biometric dimension
+                        dimension_scores.append({
+                            'dimension_id': 'biometric',
+                            'name': 'Physiological Compatibility',
+                            'score': bio_data['compatibility_score'],
+                            'description': 'Compatibility based on physiological metrics'
+                        })
+                        
+                        # Recalculate overall score
+                        overall_score = sum(d['score'] for d in dimension_scores if d['score'] is not None) / len([d for d in dimension_scores if d['score'] is not None])
+                        compatibility_data['overall_score'] = int(overall_score)
+                        
+                        # Update strengths and challenges
+                        compatibility_data['strengths'], compatibility_data['challenges'] = \
+                            identify_strengths_and_challenges(dimension_scores)
+                        
+                        # Update enhanced fields to reflect biometric changes
+                        enhanced_dimension_scores = dimension_scores
+                        enhanced_strengths = compatibility_data['strengths']
+                        enhanced_challenges = compatibility_data['challenges']
+        except Exception as bio_err:
+            # Non-critical, just log error
+            print(f"Error adding biometric compatibility: {str(bio_err)}")
+        
+        return {
+            "overall_score": compatibility_data.get("overall_score", 0),
+            "dimension_scores": enhanced_dimension_scores,
+            "strengths": enhanced_strengths,
+            "challenges": enhanced_challenges,
+            "other_user": {
+                "id": user_id,
+                "name": other_user['name'],
+                "avatar_url": other_user.get('avatar_url')
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_detail = f"Error fetching compatibility data: {str(e)}\n"
+        error_detail += f"Current User ID: {current_user_id}, "
+        error_detail += f"Other User ID: {user_id}"
+        print(error_detail)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error fetching compatibility data. Please try again."
+        )
+
+@router.get("/report/{user_id}")
+async def get_compatibility_with_user(
+    user_id: str,
+    current_user: Dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """Get compatibility details with a specific user"""
+    try:
+        current_user_id = current_user.id
+        
+        # Ensure user exists
+        user_response = supabase.table('profiles') \
+            .select('name, avatar_url') \
+            .eq('id', user_id) \
+            .execute()
+            
         if not user_response.data or len(user_response.data) == 0:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -232,13 +494,8 @@ async def get_compatibility_with_user(
         
         # Get compatibility scores between the two users
         # Ensure user_id_a is always lexicographically less than user_id_b
-        # This helps maintain the uniqueness constraint in the DB
-        if current_user_id < user_id:
-            user_id_a = current_user_id
-            user_id_b = user_id
-        else:
-            user_id_a = user_id
-            user_id_b = current_user_id
+        user_id_a = min(current_user_id, user_id)
+        user_id_b = max(current_user_id, user_id)
             
         response = supabase.table('compatibility_scores') \
             .select('*') \
@@ -369,11 +626,47 @@ async def get_compatibility_with_user(
             else:
                 enhanced_challenges.append(challenge)
         
+        # Add biometric compatibility
+        try:
+            bio_response = supabase.table('biometric_compatibility_scores') \
+                .select('*') \
+                .eq('user_id_a', user_id_a) \
+                .eq('user_id_b', user_id_b) \
+                .eq('biometric_type', 'hrv') \
+                .execute()
+                
+            if bio_response.data and len(bio_response.data) > 0:
+                bio_data = bio_response.data[0]
+                dimension_scores = enhanced_dimension_scores
+                bio_index = next((i for i, d in enumerate(dimension_scores) 
+                                if d.get('dimension_id') == 'biometric'), -1)
+                
+                if bio_index == -1:
+                    # Add biometric dimension
+                    dimension_scores.append({
+                        'dimension_id': 'biometric',
+                        'name': 'Physiological Compatibility',
+                        'score': bio_data['compatibility_score'],
+                        'description': 'Compatibility based on physiological metrics'
+                    })
+                    
+                    # Recalculate overall score
+                    overall_score = sum(d['score'] for d in dimension_scores) / len(dimension_scores)
+                    compatibility_data['overall_score'] = int(overall_score)
+                    compatibility_data['dimension_scores'] = dimension_scores
+                    
+                    # Update strengths and challenges
+                    compatibility_data['strengths'], compatibility_data['challenges'] = \
+                        identify_strengths_and_challenges(dimension_scores)
+        except Exception as bio_err:
+            # Non-critical, just log error
+            print(f"Error adding biometric compatibility: {str(bio_err)}")
+        
         return {
             "overall_score": compatibility_data.get("overall_score", 0),
-            "dimension_scores": enhanced_dimension_scores,
-            "strengths": enhanced_strengths,
-            "challenges": enhanced_challenges,
+            "dimension_scores": compatibility_data.get("dimension_scores", enhanced_dimension_scores),
+            "strengths": compatibility_data.get("strengths", enhanced_strengths),
+            "challenges": compatibility_data.get("challenges", enhanced_challenges),
             "other_user": {
                 "id": user_id,
                 "name": other_user['name'],
@@ -395,104 +688,6 @@ async def get_compatibility_with_user(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error fetching compatibility data. Please try again."
-        )
-
-@router.get("/report/{user_id}")
-async def get_detailed_compatibility_report(
-    user_id: str,
-    current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase)
-):
-    """Get detailed compatibility report with another user"""
-    try:
-        # Get basic compatibility data
-        compatibility_data = await get_compatibility_with_user(user_id, current_user, supabase)
-        
-        # Get user profiles for both users
-        current_user_profile = supabase.table('profiles') \
-            .select('*') \
-            .eq('id', current_user.id) \
-            .execute()
-        
-        other_user_profile = supabase.table('profiles') \
-            .select('*') \
-            .eq('id', user_id) \
-            .execute()
-            
-        if not current_user_profile.data or not other_user_profile.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User profile not found"
-            )
-            
-        current_user_data = current_user_profile.data[0]
-        other_user_data = other_user_profile.data[0]
-        
-        # Get shared interests
-        current_user_interests = current_user_data.get('interests', [])
-        other_user_interests = other_user_data.get('interests', [])
-        
-        # Handle case where interests might be None instead of empty list
-        if current_user_interests is None:
-            current_user_interests = []
-        if other_user_interests is None:
-            other_user_interests = []
-            
-        shared_interests = list(set(current_user_interests) & set(other_user_interests))
-        unique_current_interests = list(set(current_user_interests) - set(other_user_interests))
-        unique_other_interests = list(set(other_user_interests) - set(current_user_interests))
-        
-        # Get personality summaries if available
-        personality_comparison = None
-        if current_user_data.get('personality_summary') and other_user_data.get('personality_summary'):
-            personality_comparison = {
-                "user": current_user_data['personality_summary'],
-                "other": other_user_data['personality_summary']
-            }
-            
-        # Get communication styles if available
-        communication_dynamics = None
-        if current_user_data.get('communication_style') and other_user_data.get('communication_style'):
-            communication_dynamics = {
-                "user": current_user_data['communication_style'],
-                "other": other_user_data['communication_style'],
-                "dynamics": generate_communication_dynamics(
-                    current_user_data['communication_style'],
-                    other_user_data['communication_style']
-                )
-            }
-            
-        # Add additional information to the report
-        detailed_report = {
-            **compatibility_data,
-            "interests": {
-                "shared": shared_interests,
-                "user": unique_current_interests,
-                "other": unique_other_interests
-            },
-            "detailed_analysis": {
-                "personality_comparison": personality_comparison,
-                "communication_dynamics": communication_dynamics,
-                "values_alignment": None  # Would be populated if values data is available
-            }
-        }
-        
-        return detailed_report
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
-    except Exception as e:
-        # Add detailed error information
-        error_detail = f"Error generating compatibility report: {str(e)}\n"
-        error_detail += f"Current User ID: {current_user.id}, "
-        error_detail += f"Other User ID: {user_id}"
-        
-        print(error_detail)  # For server logs
-        
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error generating compatibility report. Please try again."
         )
 
 def generate_communication_dynamics(user_style, other_style):
