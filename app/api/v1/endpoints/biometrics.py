@@ -455,7 +455,7 @@ async def update_overall_compatibility_scores(user_id: str, supabase: Client):
                 print(f"No compatibility record found between {user_id_a} and {user_id_b}")
                 # Instead of skipping, create a basic compatibility record with just biometric data
                 biometric_dimension = {
-                    "dimension_id": "biometric",
+                    "dimension_id": "9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9",
                     "name": "Physiological Compatibility",
                     "score": bio_score['compatibility_score']
                 }

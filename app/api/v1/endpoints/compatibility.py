@@ -417,12 +417,12 @@ async def get_compatibility_with_user(
                     # Add biometric dimension to dimension scores if not already present
                     dimension_scores = enhanced_dimension_scores
                     bio_index = next((i for i, d in enumerate(dimension_scores) 
-                                   if d.get('dimension_id') == 'biometric'), -1)
+                                   if d.get('dimension_id') == '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9'), -1)
                     
                     if bio_index == -1:
                         # Add biometric dimension
                         dimension_scores.append({
-                            'dimension_id': 'biometric',
+                            'dimension_id': '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9',
                             'name': 'Physiological Compatibility',
                             'score': bio_data['compatibility_score'],
                             'description': 'Compatibility based on physiological metrics'
@@ -639,12 +639,12 @@ async def get_compatibility_with_user(
                 bio_data = bio_response.data[0]
                 dimension_scores = enhanced_dimension_scores
                 bio_index = next((i for i, d in enumerate(dimension_scores) 
-                                if d.get('dimension_id') == 'biometric'), -1)
+                                if d.get('dimension_id') == '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9'), -1)
                 
                 if bio_index == -1:
                     # Add biometric dimension
                     dimension_scores.append({
-                        'dimension_id': 'biometric',
+                        'dimension_id': '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9',
                         'name': 'Physiological Compatibility',
                         'score': bio_data['compatibility_score'],
                         'description': 'Compatibility based on physiological metrics'
