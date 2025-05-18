@@ -466,11 +466,11 @@ async def update_overall_compatibility_scores(user_id: str, supabase: Client):
                     "overall_score": bio_score['compatibility_score'],
                     "dimension_scores": [biometric_dimension],
                     "strengths": [{
-                        "dimension_id": "biometric",
+                        "dimension_id": "9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9",
                         "score": bio_score['compatibility_score']
                     }] if bio_score['compatibility_score'] >= 70 else [],
                     "challenges": [{
-                        "dimension_id": "biometric",
+                        "dimension_id": "9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9",
                         "score": bio_score['compatibility_score']
                     }] if bio_score['compatibility_score'] < 50 else [],
                     "created_at": 'now()',
@@ -491,10 +491,10 @@ async def update_overall_compatibility_scores(user_id: str, supabase: Client):
             
             # Check if biometric dimension already exists
             biometric_index = next((i for i, d in enumerate(current_dimensions) 
-                                    if d.get('dimension_id') == 'biometric'), -1)
+                                    if d.get('dimension_id') == '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9'), -1)
             
             biometric_dimension = {
-                "dimension_id": "biometric",
+                "dimension_id": "9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9",
                 "name": "Physiological Compatibility",
                 "score": bio_score['compatibility_score']
             }
