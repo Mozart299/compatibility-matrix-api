@@ -13,7 +13,7 @@ router = APIRouter()
 async def save_hrv_measurement(
     measurement_data: Dict[str, Any],
     current_user: Dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_admin_supabase)
 ):
     """Save a new HRV measurement for the current user"""
     try:
