@@ -478,6 +478,9 @@ async def get_compatibility_with_user(
     try:
         current_user_id = current_user.id
         
+        # Define biometric dimension ID constant
+        BIOMETRIC_DIMENSION_ID = '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9'
+        
         # Ensure user exists
         user_response = supabase.table('profiles') \
             .select('name, avatar_url') \
@@ -550,10 +553,13 @@ async def get_compatibility_with_user(
                     "message": "No shared completed assessments yet"
                 }
                 
-            # Get the dimensions information
+            # Get the dimensions information - ensure valid UUIDs
+            filtered_shared_dimensions = [dim_id for dim_id in shared_dimensions 
+                                         if isinstance(dim_id, str) and len(dim_id) == 36 and "-" in dim_id]
+            
             dimensions_response = supabase.table('assessment_dimensions') \
                 .select('id, name, description') \
-                .in_('id', list(shared_dimensions)) \
+                .in_('id', filtered_shared_dimensions) \
                 .execute()
                 
             return {
@@ -577,54 +583,103 @@ async def get_compatibility_with_user(
         compatibility_data = response.data[0]
         
         # Get dimension information for each dimension score
-        dimension_ids = [d["dimension_id"] for d in compatibility_data.get("dimension_scores", [])]
+        dimension_scores = compatibility_data.get("dimension_scores", [])
+        
+        # Filter and fix dimension IDs (replacing "biometric" with proper UUID)
+        fixed_dimension_scores = []
+        for score in dimension_scores:
+            fixed_score = score.copy()
+            if score.get("dimension_id") == "biometric":
+                fixed_score["dimension_id"] = BIOMETRIC_DIMENSION_ID
+            fixed_dimension_scores.append(fixed_score)
+        
+        # Extract and validate dimension IDs
+        dimension_ids = []
+        for d in fixed_dimension_scores:
+            dim_id = d.get("dimension_id")
+            # Only include valid UUID formats to prevent database errors
+            if isinstance(dim_id, str) and len(dim_id) == 36 and "-" in dim_id:
+                dimension_ids.append(dim_id)
         
         dimensions_map = {}
         if dimension_ids:
-            dimensions_response = supabase.table('assessment_dimensions') \
-                .select('id, name, description') \
-                .in_('id', dimension_ids) \
-                .execute()
-                
-            dimensions_map = {d["id"]: d for d in dimensions_response.data}
+            try:
+                dimensions_response = supabase.table('assessment_dimensions') \
+                    .select('id, name, description') \
+                    .in_('id', dimension_ids) \
+                    .execute()
+                    
+                dimensions_map = {d["id"]: d for d in dimensions_response.data}
+            except Exception as fetch_err:
+                print(f"Error fetching dimension details: {str(fetch_err)}")
+                # Continue with empty map
             
         # Enhance dimension scores with dimension information
         enhanced_dimension_scores = []
-        for score in compatibility_data.get("dimension_scores", []):
-            dimension_id = score["dimension_id"]
+        for score in fixed_dimension_scores:
+            dimension_id = score.get("dimension_id")
+            enhanced_score = {"dimension_id": dimension_id, "score": score.get("score")}
+            
             if dimension_id in dimensions_map:
-                enhanced_dimension_scores.append({
-                    **score,
+                enhanced_score.update({
                     "name": dimensions_map[dimension_id]["name"],
                     "description": dimensions_map[dimension_id]["description"]
                 })
-            else:
-                enhanced_dimension_scores.append(score)
+            elif dimension_id == BIOMETRIC_DIMENSION_ID:
+                # Provide fallback for biometric dimension
+                enhanced_score.update({
+                    "name": "Physiological Compatibility",
+                    "description": "Compatibility based on physiological metrics"
+                })
+                
+            enhanced_dimension_scores.append(enhanced_score)
         
         # Enhance strengths and challenges with dimension information
         enhanced_strengths = []
         for strength in compatibility_data.get("strengths", []):
-            dimension_id = strength["dimension_id"]
+            dimension_id = strength.get("dimension_id")
+            # Fix biometric ID if needed
+            if dimension_id == "biometric":
+                dimension_id = BIOMETRIC_DIMENSION_ID
+                
+            enhanced_strength = {**strength, "dimension_id": dimension_id}
+            
             if dimension_id in dimensions_map:
-                enhanced_strengths.append({
-                    **strength,
+                enhanced_strength.update({
                     "name": dimensions_map[dimension_id]["name"],
                     "description": dimensions_map[dimension_id]["description"]
                 })
-            else:
-                enhanced_strengths.append(strength)
+            elif dimension_id == BIOMETRIC_DIMENSION_ID:
+                # Provide fallback for biometric dimension
+                enhanced_strength.update({
+                    "name": "Physiological Compatibility",
+                    "description": "Compatibility based on physiological metrics"
+                })
+                
+            enhanced_strengths.append(enhanced_strength)
                 
         enhanced_challenges = []
         for challenge in compatibility_data.get("challenges", []):
-            dimension_id = challenge["dimension_id"]
+            dimension_id = challenge.get("dimension_id")
+            # Fix biometric ID if needed
+            if dimension_id == "biometric":
+                dimension_id = BIOMETRIC_DIMENSION_ID
+                
+            enhanced_challenge = {**challenge, "dimension_id": dimension_id}
+            
             if dimension_id in dimensions_map:
-                enhanced_challenges.append({
-                    **challenge,
+                enhanced_challenge.update({
                     "name": dimensions_map[dimension_id]["name"],
                     "description": dimensions_map[dimension_id]["description"]
                 })
-            else:
-                enhanced_challenges.append(challenge)
+            elif dimension_id == BIOMETRIC_DIMENSION_ID:
+                # Provide fallback for biometric dimension
+                enhanced_challenge.update({
+                    "name": "Physiological Compatibility",
+                    "description": "Compatibility based on physiological metrics"
+                })
+                
+            enhanced_challenges.append(enhanced_challenge)
         
         # Add biometric compatibility
         try:
@@ -639,19 +694,19 @@ async def get_compatibility_with_user(
                 bio_data = bio_response.data[0]
                 dimension_scores = enhanced_dimension_scores
                 bio_index = next((i for i, d in enumerate(dimension_scores) 
-                                if d.get('dimension_id') == '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9'), -1)
+                                if d.get('dimension_id') == BIOMETRIC_DIMENSION_ID), -1)
                 
                 if bio_index == -1:
                     # Add biometric dimension
                     dimension_scores.append({
-                        'dimension_id': '9fdf8cff-974b-4ffe-913d-5e0eb0dc48c9',
+                        'dimension_id': BIOMETRIC_DIMENSION_ID,
                         'name': 'Physiological Compatibility',
                         'score': bio_data['compatibility_score'],
                         'description': 'Compatibility based on physiological metrics'
                     })
                     
                     # Recalculate overall score
-                    overall_score = sum(d['score'] for d in dimension_scores) / len(dimension_scores)
+                    overall_score = sum(d.get('score', 0) or 0 for d in dimension_scores) / len(dimension_scores)
                     compatibility_data['overall_score'] = int(overall_score)
                     compatibility_data['dimension_scores'] = dimension_scores
                     
