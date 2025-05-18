@@ -113,7 +113,7 @@ async def get_assessments(
                 })
         
         # Calculate overall assessment progress
-        total_dimensions = len(all_dimensions)
+        total_dimensions = len(assessments)  # This will match your filtered list
         completed_dimensions = sum(1 for a in assessments if a['status'] == 'completed')
         in_progress_dimensions = sum(1 for a in assessments if a['status'] == 'in_progress')
         
