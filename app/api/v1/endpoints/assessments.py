@@ -87,6 +87,8 @@ async def get_assessments(
         # Create a complete assessment status list including dimensions not yet started
         assessments = []
         for dimension in all_dimensions:
+            if dimension['id'] == 'biometric':
+                continue
             if dimension['id'] in assessment_map:
                 # Assessment exists for this dimension
                 assessment_data = assessment_map[dimension['id']]
