@@ -410,6 +410,7 @@ async def get_compatibility_with_user(
                     .eq('user_id_b', bio_user_b) \
                     .eq('biometric_type', 'hrv') \
                     .execute()
+                print(f"Biometric response: {bio_response.data}")
                 
                 if bio_response.data and len(bio_response.data) > 0:
                     bio_data = bio_response.data[0]
