@@ -419,6 +419,8 @@ def get_hrv_score_compatibility_description(score1: int, score2: int) -> str:
 async def update_overall_compatibility_scores(user_id: str, supabase: Client):
     """Update overall compatibility scores to include biometric dimension"""
     try:
+        print(f"Starting update of overall compatibility scores for user {user_id}")
+        
         # Get all biometric compatibility scores for this user
         biometric_scores = supabase.table('biometric_compatibility_scores') \
             .select('*') \
@@ -427,15 +429,20 @@ async def update_overall_compatibility_scores(user_id: str, supabase: Client):
             .execute()
             
         if not biometric_scores.data:
+            print(f"No biometric scores found for user {user_id}")
             return  # No biometric scores to integrate
+            
+        print(f"Found {len(biometric_scores.data)} biometric scores for user {user_id}")
             
         # For each biometric score, update the corresponding overall compatibility
         for bio_score in biometric_scores.data:
             other_user_id = bio_score['user_id_a'] if bio_score['user_id_a'] != user_id else bio_score['user_id_b']
             
+            print(f"Processing biometric compatibility between {user_id} and {other_user_id}")
+            
             # Determine the correct order for user IDs in compatibility_scores table
-            user_id_a = user_id if user_id < other_user_id else other_user_id
-            user_id_b = other_user_id if user_id < other_user_id else user_id
+            user_id_a = min(user_id, other_user_id)
+            user_id_b = max(user_id, other_user_id)
             
             # Check if overall compatibility exists
             compatibility = supabase.table('compatibility_scores') \
@@ -445,7 +452,38 @@ async def update_overall_compatibility_scores(user_id: str, supabase: Client):
                 .execute()
                 
             if not compatibility.data:
-                continue  # No compatibility record to update
+                print(f"No compatibility record found between {user_id_a} and {user_id_b}")
+                # Instead of skipping, create a basic compatibility record with just biometric data
+                biometric_dimension = {
+                    "dimension_id": "biometric",
+                    "name": "Physiological Compatibility",
+                    "score": bio_score['compatibility_score']
+                }
+                
+                new_record = {
+                    "user_id_a": user_id_a,
+                    "user_id_b": user_id_b,
+                    "overall_score": bio_score['compatibility_score'],
+                    "dimension_scores": [biometric_dimension],
+                    "strengths": [{
+                        "dimension_id": "biometric",
+                        "score": bio_score['compatibility_score']
+                    }] if bio_score['compatibility_score'] >= 70 else [],
+                    "challenges": [{
+                        "dimension_id": "biometric",
+                        "score": bio_score['compatibility_score']
+                    }] if bio_score['compatibility_score'] < 50 else [],
+                    "created_at": 'now()',
+                    "updated_at": 'now()'
+                }
+                
+                try:
+                    supabase.table('compatibility_scores').insert(new_record).execute()
+                    print(f"Created new compatibility record between {user_id_a} and {user_id_b}")
+                except Exception as insert_err:
+                    print(f"Error creating new compatibility record: {str(insert_err)}")
+                
+                continue
                 
             # Get current compatibility record
             compat_record = compatibility.data[0]
@@ -464,30 +502,39 @@ async def update_overall_compatibility_scores(user_id: str, supabase: Client):
             # Update or add biometric dimension
             if biometric_index >= 0:
                 current_dimensions[biometric_index] = biometric_dimension
+                print(f"Updated biometric dimension for users {user_id_a} and {user_id_b}")
             else:
                 current_dimensions.append(biometric_dimension)
+                print(f"Added new biometric dimension for users {user_id_a} and {user_id_b}")
                 
             # Recalculate overall score as average of dimension scores
-            overall_score = int(sum(d['score'] for d in current_dimensions) / len(current_dimensions))
+            overall_score = int(sum(d.get('score', 0) for d in current_dimensions) / len(current_dimensions))
             
             # Update strengths and challenges based on dimension scores
             strengths, challenges = identify_strengths_and_challenges(current_dimensions)
             
             # Update the compatibility record
-            supabase.table('compatibility_scores') \
-                .update({
-                    'overall_score': overall_score,
-                    'dimension_scores': current_dimensions,
-                    'strengths': strengths,
-                    'challenges': challenges,
-                    'updated_at': 'now()'
-                }) \
-                .eq('id', compat_record['id']) \
-                .execute()
+            try:
+                update_response = supabase.table('compatibility_scores') \
+                    .update({
+                        'overall_score': overall_score,
+                        'dimension_scores': current_dimensions,
+                        'strengths': strengths,
+                        'challenges': challenges,
+                        'updated_at': 'now()'
+                    }) \
+                    .eq('id', compat_record['id']) \
+                    .execute()
+                    
+                print(f"Updated compatibility record between {user_id_a} and {user_id_b}")
+                print(f"New overall score: {overall_score}")
+            except Exception as update_err:
+                print(f"Error updating compatibility record: {str(update_err)}")
                 
     except Exception as e:
         print(f"Error in update_overall_compatibility_scores: {str(e)}")
         # Log the error but don't raise exception as this is a background operation
+
 
 def identify_strengths_and_challenges(dimension_scores: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
