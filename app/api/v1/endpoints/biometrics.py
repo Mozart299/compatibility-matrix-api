@@ -217,7 +217,7 @@ async def recalculate_biometric_compatibility(
         
         # Get all other users with HRV measurements
         other_users = supabase.table('biometric_measurements') \
-            .select('user_id, measurement_value') \
+            .select('user_id, measurement_value, created_at') \
             .eq('measurement_type', 'hrv') \
             .neq('user_id', user_id) \
             .execute()
