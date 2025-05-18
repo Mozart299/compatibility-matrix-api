@@ -2,9 +2,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Dict, Any, List, Optional
 from supabase import Client
+import logging
 
 from app.api.dependencies.auth import get_current_user
 from app.db.supabase import get_supabase
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("compatibility")
 
 router = APIRouter()
 
@@ -410,7 +415,8 @@ async def get_compatibility_with_user(
                     .eq('user_id_b', bio_user_b) \
                     .eq('biometric_type', 'hrv') \
                     .execute()
-                print(f"Biometric response: {bio_response.data}")
+                
+                logger.info(f"Biometric response: {bio_response.data}")
                 
                 if bio_response.data and len(bio_response.data) > 0:
                     bio_data = bio_response.data[0]
